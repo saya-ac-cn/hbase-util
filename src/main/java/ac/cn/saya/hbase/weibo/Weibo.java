@@ -2,13 +2,13 @@ package ac.cn.saya.hbase.weibo;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.*;
-import org.apache.hadoop.hbase.client.Connection;
-import org.apache.hadoop.hbase.client.ConnectionFactory;
-import org.apache.hadoop.hbase.client.HBaseAdmin;
+import org.apache.hadoop.hbase.client.*;
 import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.util.Bytes;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * @Title: Weibo
@@ -230,6 +230,68 @@ public class Weibo {
                 try {
                     admin.close();
                 } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+    /**
+     * 发布微博内容
+     * @param uid
+     * @param content
+     * 1）微博内容表中添加一条微博
+     * 2）向微博收件箱表中加入微博的RowKey
+     */
+    public void publishContent(String uid, String content){
+        Connection connection = null;
+        try{
+            connection = ConnectionFactory.createConnection(conf);
+            // 一、向微博内容表中添加1条数据，首先去微博内容表描述
+            Table contentTable = connection.getTable(TableName.valueOf(TABLE_CONTENT));
+            // 组装RowKey
+            long timeStamp = System.currentTimeMillis();
+            String rowKey = uid + "_" + timeStamp;
+            // 添加微博内容
+            Put put = new Put(Bytes.toBytes(rowKey));
+            put.addColumn(Bytes.toBytes("info"),Bytes.toBytes("content"),timeStamp,Bytes.toBytes(content));
+            // 添加到微博表
+            contentTable.put(put);
+
+            // 二、向微博收件箱表中加入发布的RowKey
+            // 1）查询笔者下的用户关系表中粉丝信息
+            Table relationTable = connection.getTable(TableName.valueOf(TABLE_RELATION));
+            // 2) 取出笔者下的关系表数据
+            Get get = new Get(Bytes.toBytes(uid));
+            // 添加过滤条件，取出笔者下的粉丝集合
+            get.addFamily(Bytes.toBytes("fans"));
+            Result result = relationTable.get(get);
+            List<byte[]> fans = new ArrayList<byte[]>();
+            // 遍历取出当前发布微博的用户的所有粉丝数据
+            for(Cell cell : result.rawCells())
+            {
+                fans.add(CellUtil.cloneQualifier(cell));
+            }
+            // 如果该用户没有粉丝，则直接return
+            if (fans.size() <= 0 ) {return;}
+            // 开始操作收件箱表
+            Table inboxTable = connection.getTable(TableName.valueOf(TABLE_INBOX));
+            // 每一个粉丝，都要向收件箱中添加该微博的内容，所以每一个粉丝都是一个Put对象
+            List<Put> puts = new ArrayList<Put>();
+            for (byte[] fan : fans)
+            {
+                Put fansPut = new Put(fan);
+                fansPut.addColumn(Bytes.toBytes("info"),Bytes.toBytes(uid),timeStamp,Bytes.toBytes(rowKey));
+                puts.add(fansPut);
+            }
+            inboxTable.put(puts);
+        }catch (IOException e){
+            e.printStackTrace();
+        }finally {
+            if (null != connection){
+                try {
+                    connection.close();
+                }catch (IOException e){
                     e.printStackTrace();
                 }
             }
