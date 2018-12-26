@@ -3,9 +3,13 @@ package ac.cn.saya.hbase.weibo;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.*;
 import org.apache.hadoop.hbase.client.*;
+import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.hbase.filter.CompareFilter;
+import org.apache.hadoop.hbase.filter.RowFilter;
+import org.apache.hadoop.hbase.filter.SubstringComparator;
 import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.util.Bytes;
-
+import java.util.Iterator;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -296,6 +300,72 @@ public class Weibo {
                 }
             }
         }
+    }
+
+    /**
+     * @描述
+     * @参数
+     * @返回值
+     * @创建人  saya.ac.cn-刘能凯
+     * @创建时间  2018/12/26
+     * @修改人和其它信息
+     * a、在用户关系表中，对当前主动操作的用户id进行添加关注的操作
+     * b、在用户关系表中，对被关注的人的用户id，添加粉丝操作
+     * c、对当前操作的用户的收件箱表中，添加他所关注的人的最近的微博rowkey
+     */
+    public void addAttend(String uid, String ... attends) throws IOException{
+        // 检查参数：如果没有参数直接返回
+        if (attends == null || attends.length <= 0 || uid == null) {return;}
+        Connection connection = ConnectionFactory.createConnection(conf);
+        Table relationTable = connection.getTable(TableName.valueOf(TABLE_RELATION));
+        List<Put> puts = new ArrayList<Put>();
+        // 在微博用户关系表中，添加新关注的好友
+        Put attendPut = new Put(Bytes.toBytes(uid));
+        for(String attend : attends){
+            // 为当前用户添加关注的人
+            attendPut.addColumn(Bytes.toBytes("attends"), Bytes.toBytes(attend), Bytes.toBytes(attend));
+            // b被关注的人，添加粉丝（uid）
+            Put fansPut = new Put(Bytes.toBytes(attend));
+            fansPut.addColumn(Bytes.toBytes("fans"), Bytes.toBytes(uid), Bytes.toBytes(uid));
+            puts.add(fansPut);
+        }
+        puts.add(attendPut);
+        // 取得微博内容表
+        Table contentTable = connection.getTable(TableName.valueOf(TABLE_CONTENT));
+        Scan scan = new Scan();
+        relationTable.put(puts);
+        // 用于存放扫描出来的，我关注的人的微博rowkey
+        List<byte[]> rowkeys = new ArrayList<byte[]>();
+        for(String attend : attends){
+            // 扫描微博rowkey，使用rowfilter过滤器
+            RowFilter filter = new RowFilter(CompareFilter.CompareOp.EQUAL, new SubstringComparator(attend + "_"));
+            scan.setFilter(filter);
+            // 通过该scan扫描结果
+            ResultScanner resultScanner = contentTable.getScanner(scan);
+            Iterator<Result> iterator = resultScanner.iterator();
+            while (iterator.hasNext()){
+                Result result = iterator.next();
+                rowkeys.add(result.getRow());
+            }
+        }
+        // 将取出的微博rowkey放置于当前操作的这个用户的收件箱表
+        // 如果所关注的人，没有一条微博，则直接返回
+        if(rowkeys.size() <= 0) {return;}
+        // 操作inboxTable
+        Table inBoxTable = connection.getTable(TableName.valueOf(TABLE_INBOX));
+        Put inboxPut = new Put(Bytes.toBytes(uid));
+        for(byte[] rowkey : rowkeys){
+            String rowkeyString = Bytes.toString(rowkey);
+            String attendUID = rowkeyString.split("_")[0];
+            String attendWeiboTS = rowkeyString.split("_")[1];
+            inboxPut.addColumn(Bytes.toBytes("info"), Bytes.toBytes(attendUID), Long.valueOf(attendWeiboTS), rowkey);
+        }
+        inBoxTable.put(inboxPut);
+        // 关闭、释放资源
+        inBoxTable.close();
+        contentTable.close();
+        relationTable.close();
+        connection.close();
     }
 
 }
