@@ -368,4 +368,47 @@ public class Weibo {
         connection.close();
     }
 
+    /**
+     * @描述
+     * @参数
+     * @返回值
+     * @创建人  saya.ac.cn-刘能凯
+     * @创建时间  2018/12/27
+     * @修改人和其它信息
+     * a、在用户关系表中，删除你要取关的那个人的用户id
+     * b、在用户关系表中，删除被你取关的那个人的粉丝中的当前操作用户id
+     * c、删除微博收件箱表中你取关的人所发布的微博的rowkey
+     */
+    public void removeAttends(String uid, String ... attends) throws IOException{
+        // 参数过滤：如果没有传递关注的人的uid，则直接返回
+        if(attends == null || attends.length <= 0 || uid == null) {
+            return;
+        }
+        Connection connection = ConnectionFactory.createConnection(conf);
+        // 得到用户关系表
+        Table relationTable = connection.getTable(TableName.valueOf(TABLE_RELATION));
+        Delete attendDelets = new Delete(Bytes.toBytes(uid));
+        List<Delete> deletes = new ArrayList<Delete>();
+        for(String attend : attends){
+            // 在对面用户关系表中移除粉丝
+            attendDelets.addColumn(Bytes.toBytes("attends"), Bytes.toBytes(attend));
+            Delete delete = new Delete(Bytes.toBytes(attend));
+            delete.addColumn(Bytes.toBytes("fans"),Bytes.toBytes("uid"));
+            deletes.add(delete);
+        }
+        deletes.add(attendDelets);
+        relationTable.delete(deletes);
+        Table inboxTable = connection.getTable(TableName.valueOf(TABLE_INBOX));
+        Delete delete = new Delete(Bytes.toBytes(uid));
+        for(String attend : attends){
+            delete.addColumns(Bytes.toBytes("info"), Bytes.toBytes(attend));
+        }
+        inboxTable.delete(delete);
+
+        // 释放资源
+        inboxTable.close();
+        relationTable.close();
+        connection.close();
+    }
+
 }
